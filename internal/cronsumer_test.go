@@ -148,6 +148,8 @@ type mockConsumer struct{}
 func (c mockConsumer) Stop() {
 }
 
+func (c mockConsumer) Ack(_ kafka.Message) {}
+
 func (c mockConsumer) ReadMessage(_ context.Context) (*segmentio.Message, error) {
 	return &segmentio.Message{}, nil
 }
@@ -284,6 +286,8 @@ type blockingConsumer struct {
 }
 
 func (b *blockingConsumer) Stop() {}
+
+func (b *blockingConsumer) Ack(_ kafka.Message) {}
 
 func (b *blockingConsumer) ReadMessage(ctx context.Context) (*segmentio.Message, error) {
 	var first bool

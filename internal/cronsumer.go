@@ -102,6 +102,7 @@ func (k *cronsumer) Listen(ctx context.Context, strategyName string, cancelFuncW
 
 		if k.skipMessageByHeaderFn != nil && k.skipMessageByHeaderFn(msg.Headers) {
 			k.cfg.Logger.Debugf("Message from %s is not processed. Header filter applied. Headers: %v", k.cfg.Consumer.Topic, msg.Headers.Pretty())
+			k.kafkaConsumer.Ack(msg.Message)
 			continue
 		}
 
@@ -113,6 +114,7 @@ func (k *cronsumer) Listen(ctx context.Context, strategyName string, cancelFuncW
 			if err = k.kafkaProducer.ProduceWithRetryOption(*msg, false, false); err != nil {
 				k.cfg.Logger.Errorf("Error %s sending next iteration KafkaMessage: %#v", err.Error(), *msg)
 			}
+			k.kafkaConsumer.Ack(msg.Message)
 
 			return
 		}
@@ -131,6 +133,7 @@ func (k *cronsumer) Listen(ctx context.Context, strategyName string, cancelFuncW
 			if err = k.kafkaProducer.ProduceWithRetryOption(*msg, false, true); err != nil {
 				k.cfg.Logger.Errorf("Error %s sending next iteration KafkaMessage: %#v", err.Error(), *msg)
 			}
+			k.kafkaConsumer.Ack(msg.Message)
 		} else {
 			k.sendToMessageChannel(*msg)
 		}
@@ -164,6 +167,7 @@ func (k *cronsumer) processMessage() {
 			msg.AddHeader(createErrHeader(err))
 			k.produce(msg)
 		}
+		k.kafkaConsumer.Ack(msg.Message)
 	}
 }
 
@@ -197,6 +201,7 @@ func (k *cronsumer) republishUnchanged(msg MessageWrapper) {
 	if err := k.kafkaProducer.ProduceWithRetryOption(msg, false, false); err != nil {
 		k.cfg.Logger.Errorf("Error %s re-publishing message on shutdown: %#v", err.Error(), msg)
 	}
+	k.kafkaConsumer.Ack(msg.Message)
 }
 
 func (k *cronsumer) produce(msg MessageWrapper) {

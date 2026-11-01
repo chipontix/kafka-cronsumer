@@ -28,7 +28,7 @@ with the power of auto pause and concurrency.
 
 - Messages should be processed in order
 - Messages should be certainly processed (we discard messages if max retry is exceeded)
-- Messages should be committed (we use auto-commit interval for increasing performance)
+- Messages should be processed exactly once (a record's offset is committed after it is handled, asynchronously at `consumer.commitInterval`, so a crash can redeliver records)
 - Messages with TTL (Time to Live)
 
 ## Guide

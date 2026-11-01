@@ -2,7 +2,7 @@ package internal
 
 import (
 	"context"
-	"errors"
+	"slices"
 	"testing"
 
 	"github.com/Trendyol/kafka-cronsumer/pkg/kafka"
@@ -36,7 +36,7 @@ func (m *mockSegmentReader) Close() error {
 	return nil
 }
 
-func Test_ReadMessage_Should_Commit_And_Return_Fetched_Message_When_Context_Cancelled_After_Fetch(t *testing.T) {
+func Test_ReadMessage_Should_Return_Fetched_Message_When_Context_Cancelled_After_Fetch(t *testing.T) {
 	// Given a fetched record whose listening context gets cancelled
 	// immediately after FetchMessage returns (cron window close).
 	ctx, cancel := context.WithCancel(context.Background())
@@ -56,7 +56,7 @@ func Test_ReadMessage_Should_Commit_And_Return_Fetched_Message_When_Context_Canc
 
 	// When
 	msg, err := k.ReadMessage(ctx)
-	// Then the fetched record must not be discarded
+	// Then the fetched record must not be discarded, and is committed only on Ack
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -66,11 +66,47 @@ func Test_ReadMessage_Should_Commit_And_Return_Fetched_Message_When_Context_Canc
 	if string(msg.Key) != string(fetched.Key) || msg.Offset != fetched.Offset {
 		t.Fatalf("expected %+v, got %+v", fetched, *msg)
 	}
+	if reader.commitCall != 0 {
+		t.Fatalf("expected no commit before Ack, got %d", reader.commitCall)
+	}
+
+	k.Ack(NewMessageWrapper(*msg, kafka.FixedBackOffStrategy).Message)
 	if reader.commitCall != 1 {
 		t.Fatalf("expected exactly one commit call, got %d", reader.commitCall)
 	}
 	if reader.commitCtx == nil || reader.commitCtx.Err() != nil {
 		t.Fatal("expected commit to run with a context detached from the cancelled listening context")
+	}
+}
+
+func Test_Ack_Should_Commit_Only_Up_To_First_Unacked_Record(t *testing.T) {
+	// Given three fetched records of one partition
+	reader := &queueReader{}
+	for i := int64(0); i < 3; i++ {
+		reader.msgs = append(reader.msgs, segmentio.Message{Topic: "exception", Partition: 0, Offset: i})
+	}
+	k := &kafkaConsumer{consumer: reader, cfg: &kafka.Config{Logger: logger.New("info")}}
+	var fetched []kafka.Message
+	for range 3 {
+		m, err := k.ReadMessage(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		fetched = append(fetched, NewMessageWrapper(*m, kafka.FixedBackOffStrategy).Message)
+	}
+
+	// When they are handled out of order, Then the commit never passes a record in flight
+	k.Ack(fetched[1])
+	if got := reader.committed(); len(got) != 0 {
+		t.Fatalf("offset 0 is in flight, expected no commit, got %v", got)
+	}
+	k.Ack(fetched[0])
+	k.Ack(fetched[2])
+	if got := reader.committed(); !slices.Equal(got, []int64{1, 2}) {
+		t.Fatalf("expected commits [1 2], got %v", got)
+	}
+	if len(k.pending) != 0 {
+		t.Fatalf("expected nothing pending, got %v", k.pending)
 	}
 }
 
@@ -94,28 +130,5 @@ func Test_ReadMessage_Should_Return_Nil_Nil_When_Fetch_Context_Cancelled(t *test
 	}
 	if reader.commitCall != 0 {
 		t.Fatalf("expected no commit call, got %d", reader.commitCall)
-	}
-}
-
-func Test_ReadMessage_Should_Return_Error_When_Commit_Fails(t *testing.T) {
-	// Given
-	reader := &mockSegmentReader{
-		msg:       segmentio.Message{Topic: "exception"},
-		commitErr: errors.New("broker unavailable"),
-	}
-	k := &kafkaConsumer{
-		consumer: reader,
-		cfg:      &kafka.Config{Logger: logger.New("info")},
-	}
-
-	// When
-	msg, err := k.ReadMessage(context.Background())
-
-	// Then
-	if msg != nil {
-		t.Fatalf("expected nil message, got %+v", msg)
-	}
-	if err == nil || err.Error() != "broker unavailable" {
-		t.Fatalf("expected commit error, got %v", err)
 	}
 }
